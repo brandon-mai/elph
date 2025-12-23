@@ -4,7 +4,7 @@ hashed based data sketching for graphs. Implemented in pytorch, but based on the
 from time import time
 import logging
 
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import torch
 from torch import float
 import numpy as np

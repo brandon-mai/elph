@@ -7,6 +7,7 @@ import warnings
 from math import inf
 import sys
 import random
+import os
 
 sys.path.insert(0, '..')
 
@@ -27,8 +28,105 @@ from src.models.elph import ELPH, BUDDY
 from src.models.seal import SEALDGCNN, SEALGCN, SEALGIN, SEALSAGE
 from src.utils import ROOT_DIR, print_model_params, select_embedding, str2bool
 from src.wandb_setup import initialise_wandb
-from src.runners.train import get_train_func
+from src.runners.train import get_train_func, get_validate_func
 from src.runners.inference import test
+
+
+def upload_to_huggingface(checkpoint_path, args):
+    """
+    Upload model checkpoint to HuggingFace Hub
+    """
+    try:
+        from huggingface_hub import HfApi, create_repo
+        
+        if not hasattr(args, 'hf_repo_id') or args.hf_repo_id is None:
+            print("⚠️ HuggingFace repo ID not provided. Skipping upload.")
+            return
+        
+        print(f"📤 Uploading checkpoint to HuggingFace: {args.hf_repo_id}")
+        
+        # Khởi tạo API
+        api = HfApi()
+        
+        # Tạo repo nếu chưa tồn tại (sẽ không lỗi nếu đã tồn tại)
+        try:
+            create_repo(
+                repo_id=args.hf_repo_id,
+                repo_type="model",
+                exist_ok=True,
+                private=False  # Đặt True nếu muốn repo private
+            )
+            print(f"✅ Repository created/verified: {args.hf_repo_id}")
+        except Exception as e:
+            print(f"⚠️ Repo creation warning: {e}")
+        
+        # Upload file
+        run_name = args.wandb_run_name if args.wandb_run_name else 'default'
+        path_in_repo = f"checkpoints/{args.dataset_name}_{args.model}_{run_name}.pt"
+        
+        api.upload_file(
+            path_or_fileobj=checkpoint_path,
+            path_in_repo=path_in_repo,
+            repo_id=args.hf_repo_id,
+            repo_type="model",
+        )
+        
+        print(f"✅ Checkpoint uploaded successfully to {args.hf_repo_id}/{path_in_repo}")
+        
+        # Tạo README.md nếu chưa có
+        try:
+            readme_content = f"""---
+                tags:
+                - link-prediction
+                - graph-neural-network
+                - {args.model.lower()}
+                datasets:
+                - {args.dataset_name}
+                ---
+
+                # {args.model} Model for {args.dataset_name}
+
+                This model was trained using the ELPH framework.
+
+                ## Model Details
+                - **Model**: {args.model}
+                - **Dataset**: {args.dataset_name}
+                - **Run Name**: {run_name}
+                - **Hidden Channels**: {args.hidden_channels}
+                - **Epochs**: {args.epochs}
+
+                ## Usage
+
+                ```python
+                import torch
+                from huggingface_hub import hf_hub_download
+
+                # Download checkpoint
+                checkpoint_path = hf_hub_download(
+                    repo_id="{args.hf_repo_id}",
+                    filename="{path_in_repo}"
+                )
+
+                # Load model
+                state_dict = torch.load(checkpoint_path)
+                # model.load_state_dict(state_dict)
+                ```
+            """
+            api.upload_file(
+                path_or_fileobj=readme_content.encode(),
+                path_in_repo="README.md",
+                repo_id=args.hf_repo_id,
+                repo_type="model",
+            )
+            print(f"✅ README.md created/updated")
+        except Exception as e:
+            print(f"⚠️ README creation warning: {e}")
+            
+    except ImportError:
+        print("❌ huggingface_hub not installed. Run: pip install huggingface_hub")
+    except Exception as e:
+        print(f"❌ Error uploading to HuggingFace: {e}")
+        print("Make sure you're logged in: huggingface-cli login --token YOUR_TOKEN")
 
 def print_results_list(results_list):
     for idx, res in enumerate(results_list):
@@ -53,6 +151,7 @@ def run(args):
     print(f"executing on {device}")
     results_list = []
     train_func = get_train_func(args)
+    validate_func = get_validate_func(args)
     for rep in range(args.reps):
         set_seed(rep)
         dataset, splits, directed, eval_metric = get_data(args)
@@ -70,6 +169,18 @@ def run(args):
         for epoch in range(args.epochs):
             t0 = time.time()
             loss = train_func(model, optimizer, train_loader, args, device)
+            
+            # Tính validation loss
+            val_loss = validate_func(model, val_loader, args, device)
+            
+            # Log train_loss và val_loss mỗi epoch (không cần chờ eval_steps)
+            if args.wandb:
+                wandb.log({
+                    f'rep{rep}_train_loss': loss,
+                    f'rep{rep}_val_loss': val_loss,
+                    'epoch': epoch
+                })
+            
             if (epoch + 1) % args.eval_steps == 0:
                 results = test(model, evaluator, train_eval_loader, val_loader, test_loader, args, device,
                                eval_metric=eval_metric)
@@ -79,11 +190,18 @@ def run(args):
                         val_res = tmp_val_res
                         test_res = tmp_test_res
                         best_epoch = epoch
-                    res_dic = {f'rep{rep}_loss': loss, f'rep{rep}_Train' + key: 100 * train_res,
-                               f'rep{rep}_Val' + key: 100 * val_res, f'rep{rep}_tmp_val' + key: 100 * tmp_val_res,
-                               f'rep{rep}_tmp_test' + key: 100 * tmp_test_res,
-                               f'rep{rep}_Test' + key: 100 * test_res, f'rep{rep}_best_epoch': best_epoch,
-                               f'rep{rep}_epoch_time': time.time() - t0, 'epoch_step': epoch}
+                    res_dic = {
+                        f'rep{rep}_loss': loss,             # Training loss
+                        f'rep{rep}_val_loss': val_loss,     # Validation loss (MỚI)
+                        f'rep{rep}_Train' + key: 100 * train_res,
+                        f'rep{rep}_Val' + key: 100 * val_res, 
+                        f'rep{rep}_tmp_val' + key: 100 * tmp_val_res,
+                        f'rep{rep}_tmp_test' + key: 100 * tmp_test_res,
+                        f'rep{rep}_Test' + key: 100 * test_res, 
+                        f'rep{rep}_best_epoch': best_epoch,
+                        f'rep{rep}_epoch_time': time.time() - t0, 
+                        'epoch_step': epoch
+                    }
                     if args.wandb:
                         wandb.log(res_dic)
                     to_print = f'Epoch: {epoch:02d}, Best epoch: {best_epoch}, Loss: {loss:.4f}, Train: {100 * train_res:.2f}%, Valid: ' \
@@ -95,7 +213,6 @@ def run(args):
             print_results_list(results_list)
 
         if args.save_model:
-            import os
             # Tạo thư mục lưu nếu chưa tồn tại
             save_dir = os.path.join(ROOT_DIR, 'saved_models')
             os.makedirs(save_dir, exist_ok=True)
@@ -108,6 +225,10 @@ def run(args):
             # Lưu state_dict (trọng số mô hình)
             torch.save(model.state_dict(), save_path)
             print(f"✅ Đã lưu model checkpoint vào: {save_path}")
+            
+            # Upload to HuggingFace
+            if hasattr(args, 'hf_repo_id') and args.hf_repo_id:
+                upload_to_huggingface(save_path, args)
         
     if args.reps > 1:
         test_acc_mean, val_acc_mean, train_acc_mean = np.mean(results_list, axis=0) * 100
@@ -149,7 +270,7 @@ def select_model(args, dataset, emb, device):
         raise NotImplementedError
     parameters = list(model.parameters())
     if args.train_node_embedding:
-        torch.nn.init.xavier_uniform_(emb.weight)
+        # torch.nn.init.xavier_uniform_(emb.weight)
         parameters += list(emb.parameters())
     optimizer = torch.optim.Adam(params=parameters, lr=args.lr, weight_decay=args.weight_decay)
     total_params = sum(p.numel() for param in parameters for p in param)
@@ -283,6 +404,11 @@ if __name__ == '__main__':
     parser.add_argument('--wandb_epoch_list', nargs='+', default=[0, 1, 2, 4, 8, 16],
                         help='list of epochs to log gradient flow')
     parser.add_argument('--log_features', action='store_true', help="log feature importance")
+    
+    # HuggingFace settings
+    parser.add_argument('--hf_repo_id', type=str, default=None,
+                        help='HuggingFace repository ID to upload model checkpoints (e.g., username/repo-name)')
+    
     args = parser.parse_args()
     if (args.max_hash_hops == 1) and (not args.use_zero_one):
         print("WARNING: (0,1) feature knock out is not supported for 1 hop. Running with all features")
