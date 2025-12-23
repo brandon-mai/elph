@@ -6,7 +6,6 @@ from math import inf
 
 import torch
 from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
 import wandb
 import numpy as np
 

@@ -3,7 +3,6 @@ A selection of heuristic methods (Personalized PageRank, Adamic Adar and Common 
 """
 
 import numpy as np
-from tqdm.auto import tqdm
 import torch
 from torch_geometric.loader import DataLoader
 
@@ -18,7 +17,7 @@ def CN(A, edge_index, batch_size=100000):
     """
     link_loader = DataLoader(range(edge_index.size(0)), batch_size)
     scores = []
-    for ind in tqdm(link_loader):
+    for ind in link_loader:
         src, dst = edge_index[ind, 0], edge_index[ind, 1]
         cur_scores = np.array(np.sum(A[src].multiply(A[dst]), 1)).flatten()
         scores.append(cur_scores)
@@ -40,7 +39,7 @@ def AA(A, edge_index, batch_size=100000):
     A_ = A.multiply(multiplier).tocsr()
     link_loader = DataLoader(range(edge_index.size(0)), batch_size)
     scores = []
-    for ind in tqdm(link_loader):
+    for ind in link_loader:
         src, dst = edge_index[ind, 0], edge_index[ind, 1]
         cur_scores = np.array(np.sum(A[src].multiply(A_[dst]), 1)).flatten()
         scores.append(cur_scores)
@@ -62,7 +61,7 @@ def RA(A, edge_index, batch_size=100000):
     A_ = A.multiply(multiplier).tocsr()
     link_loader = DataLoader(range(edge_index.size(0)), batch_size)
     scores = []
-    for ind in tqdm(link_loader):
+    for ind in link_loader:
         src, dst = edge_index[ind, 0], edge_index[ind, 1]
         cur_scores = np.array(np.sum(A[src].multiply(A_[dst]), 1)).flatten()
         scores.append(cur_scores)
@@ -88,7 +87,7 @@ def PPR(A, edge_index):
     scores = []
     visited = set([])
     j = 0
-    for i in tqdm(range(edge_reindex.shape[1])):
+    for i in range(edge_reindex.shape[1]):
         if i < j:
             continue
         src = edge_reindex[0, i]

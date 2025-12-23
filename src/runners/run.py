@@ -164,12 +164,12 @@ def run(args):
         emb = select_embedding(args, dataset.data.num_nodes, device)
         model, optimizer = select_model(args, dataset, emb, device)
         val_res = test_res = best_epoch = 0
+        train_losses = []
+        val_losses = []
        
         for epoch in range(args.epochs):
             t0 = time.time()
             train_loss = train_func(model, optimizer, train_loader, args, device)
-            train_losses = []
-            val_losses = []
             
             # Tính validation loss
             val_loss = validate_func(model, val_loader, args, device)

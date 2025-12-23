@@ -16,7 +16,6 @@ from torch_geometric.data import Data, Dataset, InMemoryDataset
 import numpy as np
 from torch_geometric.utils import (negative_sampling, add_self_loops)
 from torch_sparse import coalesce
-from tqdm.auto import tqdm
 import scipy.sparse as ssp
 
 from src.utils import get_src_dst_degree, neighbors, get_pos_neg_edges
@@ -407,7 +406,7 @@ def extract_enclosing_subgraphs(link_index, A, x, y, num_hops, node_label='drnl'
     @return:
     """
     data_list = []
-    for src, dst in tqdm(link_index.tolist()):
+    for src, dst in link_index.tolist():
         src_degree, dst_degree = get_src_dst_degree(src, dst, A, max_nodes_per_hop)
         tmp = k_hop_subgraph(src, dst, num_hops, A, ratio_per_hop,
                              max_nodes_per_hop, node_features=x, y=y,
