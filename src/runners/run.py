@@ -164,9 +164,7 @@ def run(args):
         emb = select_embedding(args, dataset.data.num_nodes, device)
         model, optimizer = select_model(args, dataset, emb, device)
         val_res = test_res = best_epoch = 0
-        print(f'running repetition {rep}')
-        if rep == 0:
-            print_model_params(model)
+       
         for epoch in range(args.epochs):
             t0 = time.time()
             train_loss = train_func(model, optimizer, train_loader, args, device)
@@ -195,7 +193,7 @@ def run(args):
                         test_res = tmp_test_res
                         best_epoch = epoch
                     res_dic = {
-                        f'rep{rep}_loss': loss,             # Training loss
+                        f'rep{rep}_loss': train_loss,             # Training loss
                         f'rep{rep}_val_loss': val_loss,     # Validation loss (MỚI)
                         f'rep{rep}_Train' + key: 100 * train_res,
                         f'rep{rep}_Val' + key: 100 * val_res, 
@@ -208,9 +206,8 @@ def run(args):
                     }
                     if args.wandb:
                         wandb.log(res_dic)
-                    to_print = f'Epoch: {epoch:02d}, Best epoch: {best_epoch}, Loss: {loss:.4f}, Train: {100 * train_res:.2f}%, Valid: ' \
+                    to_print = f'Epoch: {epoch:02d}, Best epoch: {best_epoch}, Loss: {train_loss:.4f}, Train: {100 * train_res:.2f}%, Valid: ' \
                                f'{100 * val_res:.2f}%, Test: {100 * test_res:.2f}%, epoch time: {time.time() - t0:.1f}'
-                    print(key)
                     print(to_print)
         
         plt.figure(figsize=(8, 5))

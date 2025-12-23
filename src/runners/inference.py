@@ -25,15 +25,15 @@ def get_test_func(model_str):
 
 @torch.no_grad()
 def test(model, evaluator, train_loader, val_loader, test_loader, args, device, emb=None, eval_metric='hits'):
-    print('starting testing')
+    # print('starting testing')  # Commented to reduce output
     t0 = time.time()
     model.eval()
-    print("get train predictions")
+    # print("get train predictions")  # Commented to reduce output
     test_func = get_test_func(args.model)
     pos_train_pred, neg_train_pred, train_pred, train_true = test_func(model, train_loader, device, args, split='train')
-    print("get val predictions")
+    # print("get val predictions")  # Commented to reduce output
     pos_val_pred, neg_val_pred, val_pred, val_true = test_func(model, val_loader, device, args, split='val')
-    print("get test predictions")
+    # print("get test predictions")  # Commented to reduce output
     pos_test_pred, neg_test_pred, test_pred, test_true = test_func(model, test_loader, device, args, split='test')
 
     if eval_metric == 'hits':
@@ -46,7 +46,7 @@ def test(model, evaluator, train_loader, val_loader, test_loader, args, device, 
     elif eval_metric == 'auc':
         results = evaluate_auc(val_pred, val_true, test_pred, test_true)
 
-    print(f'testing ran in {time.time() - t0}')
+    # print(f'testing ran in {time.time() - t0}')  # Commented to reduce output
 
     return results
 
@@ -55,12 +55,12 @@ def test(model, evaluator, train_loader, val_loader, test_loader, args, device, 
 def get_preds(model, loader, device, args, emb=None, split=None):
     n_samples = get_split_samples(split, args, len(loader.dataset))
     y_pred, y_true = [], []
-    pbar = tqdm(loader, ncols=70)
+    # pbar = tqdm(loader, ncols=70)  # Commented to reduce output
     if args.wandb:
         wandb.log({f"inference_{split}_total_batches": len(loader)})
     batch_processing_times = []
     t0 = time.time()
-    for batch_count, data in enumerate(pbar):
+    for batch_count, data in enumerate(loader):  # Using loader directly
         start_time = time.time()
         # todo this should not get hit, refactor out the if statement
         if args.model == 'BUDDY':
@@ -91,7 +91,7 @@ def get_preds(model, loader, device, args, emb=None, split=None):
     pos_pred = pred[true == 1]
     neg_pred = pred[true == 0]
     samples_used = len(loader.dataset) if n_samples > len(loader.dataset) else n_samples
-    print(f'{len(pos_pred)} positives and {len(neg_pred)} negatives for sample of {samples_used} edges')
+    # print(f'{len(pos_pred)} positives and {len(neg_pred)} negatives for sample of {samples_used} edges')  # Commented to reduce output
     return pos_pred, neg_pred, pred, true
 
 
@@ -113,7 +113,7 @@ def get_buddy_preds(model, loader, device, args, split=None):
             emb = model.node_embedding.weight
     else:
         emb = None
-    for batch_count, indices in enumerate(tqdm(loader)):
+    for batch_count, indices in enumerate(loader):  # tqdm removed
         curr_links = links[indices]
         batch_emb = None if emb is None else emb[curr_links].to(device)
         if args.use_struct_feature:
@@ -183,7 +183,7 @@ def get_elph_preds(model, loader, device, args, split=None):
     else:
         emb = None
     node_features, hashes, cards = model(data.x.to(device), data.edge_index.to(device))
-    for batch_count, indices in enumerate(tqdm(loader)):
+    for batch_count, indices in enumerate(loader):  # tqdm removed
         curr_links = links[indices].to(device)
         batch_emb = None if emb is None else emb[curr_links].to(device)
         if args.use_struct_feature:
