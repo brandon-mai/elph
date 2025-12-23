@@ -47,6 +47,7 @@ if [ -z "$HF_TOKEN" ]; then
 else
     echo "✅ HF_TOKEN found in environment"
     # Login huggingface bằng token
+    git config --global credential.helper store
     huggingface-cli login --token "$HF_TOKEN" --add-to-git-credential
     if [ $? -eq 0 ]; then
         echo "✅ HuggingFace login successful!"
