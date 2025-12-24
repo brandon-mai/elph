@@ -9,7 +9,8 @@ from torch.utils.data import DataLoader
 from torch.nn import BCEWithLogitsLoss
 import wandb
 import numpy as np
-
+from tqdm.auto import tqdm
+from torch_geometric.utils import degree
 from src.utils import get_num_samples
 
 
@@ -42,7 +43,7 @@ def train_buddy(model, optimizer, train_loader, args, device, emb=None):
         wandb.log({"train_total_batches": len(train_loader)})
     batch_processing_times = []
     loader = DataLoader(range(len(links)), args.batch_size, shuffle=True)
-    for batch_count, indices in enumerate(loader):  # tqdm removed to reduce output
+    for batch_count, indices in enumerate(tqdm(loader)):  # tqdm removed to reduce output
         # do node level things
         if model.node_embedding is not None:
             if args.propagate_embeddings:
@@ -181,6 +182,17 @@ def train_elph(model, optimizer, train_loader, args, device):
     if args.wandb:
         wandb.log({"train_total_batches": len(train_loader)})
     batch_processing_times = []
+
+    # if model.node_embedding is not None:
+    #     if args.propagate_embeddings:
+    #         emb = model.propagate_embeddings_func(data.edge_index.to(device))
+    #     else:
+    #         emb = model.node_embedding.weight
+    # else:
+    #     emb = None
+    # # get node features
+    # node_features, hashes, cards = model(data.x.to(device), data.edge_index.to(device))
+
     loader = DataLoader(range(len(links)), args.batch_size, shuffle=True)
     for batch_count, indices in enumerate(loader):
         # do node level things
@@ -193,6 +205,7 @@ def train_elph(model, optimizer, train_loader, args, device):
             emb = None
         # get node features
         node_features, hashes, cards = model(data.x.to(device), data.edge_index.to(device))
+        
         curr_links = links[indices].to(device)
         batch_node_features = None if node_features is None else node_features[curr_links]
         batch_emb = None if emb is None else emb[curr_links].to(device)
@@ -259,6 +272,51 @@ def validate_elph(model, val_loader, args, device):
             
     return total_loss / len(val_loader.dataset)
 
+def validate_buddy(model, val_loader, args, device):
+    """
+    Calculate validation loss for BUDDY model
+    """
+    model.eval()
+    total_loss = 0
+    data = val_loader.dataset
+    links = data.links
+    labels = torch.tensor(data.labels)
+    
+    loader = DataLoader(range(len(links)), args.batch_size, shuffle=False)
+    with torch.no_grad():
+        for indices in loader:
+            # Get embeddings (giống hệt train_buddy)
+            if model.node_embedding is not None:
+                if args.propagate_embeddings:
+                    # BUDDY không support, nhưng để đồng nhất với train
+                    emb = model.node_embedding.weight
+                else:
+                    emb = model.node_embedding.weight
+            else:
+                emb = None
+            
+            curr_links = links[indices]
+            batch_emb = None if emb is None else emb[curr_links].to(device)
+            
+            # Get features (giống hệt train_buddy)
+            if args.use_struct_feature:
+                subgraph_features = data.subgraph_features[indices].to(device)
+            else:
+                subgraph_features = torch.zeros(data.subgraph_features[indices].shape).to(device)
+            
+            node_features = data.x[curr_links].to(device)
+            degrees = data.degrees[curr_links].to(device)
+            
+            if args.use_RA:
+                RA = data.RA[indices].to(device)
+            else:
+                RA = None
+            
+            logits = model(subgraph_features, node_features, degrees[:, 0], degrees[:, 1], RA, batch_emb)
+            loss = get_loss(args.loss)(logits, labels[indices].squeeze(0).to(device))
+            total_loss += loss.item() * len(indices)
+            
+    return total_loss / len(val_loader.dataset)
 
 def validate_generic(model, val_loader, args, device, emb=None):
     """
@@ -270,10 +328,38 @@ def validate_generic(model, val_loader, args, device, emb=None):
     with torch.no_grad():
         for data in val_loader:
             if args.model == 'BUDDY':
-                data_dev = [elem.squeeze().to(device) for elem in data]
-                logits = model(*data_dev[:-1])
-                loss = get_loss(args.loss)(logits, data[-1].squeeze(0).to(device))
-                total_loss += loss.item() * args.batch_size
+                # BUDDY dataset returns: (sf, node_features, src_degree, dst_degree, RA, labels)
+                sf, node_features, src_degree, dst_degree, RA, labels = data
+                sf = sf.to(device)
+                node_features = node_features.to(device) if node_features is not None else None
+                src_degree = src_degree.to(device) if src_degree is not None else None
+                dst_degree = dst_degree.to(device) if dst_degree is not None else None
+                RA = RA.to(device) if RA is not None else None
+                labels = labels.to(device)
+                
+                # ✅ LẤY EMBEDDINGS như trong training
+                if model.node_embedding is not None and emb is None:
+                    if args.propagate_embeddings:
+                        # BUDDY không support propagate_embeddings
+                        emb = model.node_embedding.weight
+                    else:
+                        emb = model.node_embedding.weight
+                
+                # Lấy batch embeddings cho các links hiện tại
+                batch_emb = None
+                if emb is not None:
+                    # Cần lấy indices của src và dst nodes từ dataset
+                    # Giả sử val_loader.dataset có links attribute
+                    curr_link_indices = None  # TODO: cần xác định cách lấy link indices
+                    if hasattr(val_loader.dataset, 'links'):
+                        # Logic này phụ thuộc vào cách dataloader trả về data
+                        pass
+                    batch_emb = emb  # placeholder, cần fix đúng indexing
+                
+                # Gọi đúng forward signature của BUDDY
+                logits = model(sf, node_features, src_degree, dst_degree, RA, batch_emb)
+                loss = get_loss(args.loss)(logits, labels.squeeze())
+                total_loss += loss.item() * len(labels)
             else:
                 data = data.to(device)
                 x = data.x if args.use_feature else None
@@ -292,7 +378,7 @@ def get_validate_func(args):
     elif args.model == 'BUDDY':
         # BUDDY validation logic tương tự ELPH hoặc dùng chung nếu cấu trúc giống nhau
         # Ở đây giả sử dùng chung validate_elph vì BUDDY cũng dùng HashDataset
-        return validate_elph 
+        return validate_buddy
     else:
         return validate_generic
 

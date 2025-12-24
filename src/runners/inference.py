@@ -11,7 +11,7 @@ import numpy as np
 
 from src.evaluation import evaluate_auc, evaluate_hits, evaluate_mrr
 from src.utils import get_num_samples
-
+from tqdm import tqdm
 
 def get_test_func(model_str):
     if model_str == 'ELPH':
@@ -95,48 +95,64 @@ def get_preds(model, loader, device, args, emb=None, split=None):
 
 
 @torch.no_grad()
-def get_buddy_preds(model, loader, device, args, split=None):
-    n_samples = get_split_samples(split, args, len(loader.dataset))
-    t0 = time.time()
-    preds = []
+def get_buddy_preds(model, loader, device, args, split='train'):
+    model.eval()
     data = loader.dataset
-    # hydrate edges
     links = data.links
     labels = torch.tensor(data.labels)
-    loader = DataLoader(range(len(links)), args.eval_batch_size,
-                        shuffle=False)  # eval batch size should be the largest that fits on GPU
-    if model.node_embedding is not None:
-        if args.propagate_embeddings:
-            emb = model.propagate_embeddings_func(data.edge_index.to(device))
-        else:
+    
+    pos_preds = []
+    neg_preds = []
+    
+    # ✅ Batch processing như train/validate
+    batch_loader = DataLoader(range(len(links)), args.batch_size, shuffle=False)
+    
+    for indices in tqdm(batch_loader, desc=f'Inference {split}'):
+        # Get embeddings
+        if model.node_embedding is not None:
             emb = model.node_embedding.weight
-    else:
-        emb = None
-    for batch_count, indices in enumerate(loader):  # tqdm removed
+        else:
+            emb = None
+        
         curr_links = links[indices]
         batch_emb = None if emb is None else emb[curr_links].to(device)
+        
+        # Get features - ✅ BATCH-WISE
         if args.use_struct_feature:
             subgraph_features = data.subgraph_features[indices].to(device)
         else:
             subgraph_features = torch.zeros(data.subgraph_features[indices].shape).to(device)
+        
         node_features = data.x[curr_links].to(device)
         degrees = data.degrees[curr_links].to(device)
+        
         if args.use_RA:
             RA = data.RA[indices].to(device)
         else:
             RA = None
+        
         logits = model(subgraph_features, node_features, degrees[:, 0], degrees[:, 1], RA, batch_emb)
-        preds.append(logits.view(-1).cpu())
-        if (batch_count + 1) * args.eval_batch_size > n_samples:
-            break
+        
+        # ✅ SQUEEZE to 1D before appending
+        logits = logits.squeeze(-1)  # [batch_size, 1] -> [batch_size]
+        
+        # Separate pos/neg predictions
+        batch_labels = labels[indices]
+        pos_mask = batch_labels == 1
+        neg_mask = batch_labels == 0
+        
+        if pos_mask.any():
+            pos_preds.append(logits[pos_mask].cpu())
+        if neg_mask.any():
+            neg_preds.append(logits[neg_mask].cpu())
+    
+    pos_pred = torch.cat(pos_preds, dim=0) if pos_preds else torch.tensor([])
+    neg_pred = torch.cat(neg_preds, dim=0) if neg_preds else torch.tensor([])
+    pred = torch.cat([pos_pred, neg_pred], dim=0)
+    true = torch.cat([torch.ones(len(pos_pred)), torch.zeros(len(neg_pred))], dim=0)
+    
+    return pos_pred, neg_pred, pred, true
 
-    if args.wandb:
-        wandb.log({f"inference_{split}_epoch_time": time.time() - t0})
-    pred = torch.cat(preds)
-    labels = labels[:len(pred)]
-    pos_pred = pred[labels == 1]
-    neg_pred = pred[labels == 0]
-    return pos_pred, neg_pred, pred, labels
 
 
 def get_split_samples(split, args, dataset_len):
