@@ -142,23 +142,35 @@ class ELPH(torch.nn.Module):
             self.sign_embedding = SIGNEmbedding(args.hidden_channels, args.hidden_channels, args.hidden_channels,
                                                 args.sign_k, args.sign_dropout)
         self.initial_residual = getattr(args, 'initial_residual', False) # Lấy cờ từ args
+        self.init_hashes = None
+        self.init_hll = None
 
     def _convolution_builder(self, num_features, hidden_channels, args):
         self.convs = torch.nn.ModuleList()
-        if args.feature_prop in {'residual', 'cat'}:  # use a linear encoder? hnhu day moi la linear
+        self.use_encoder = self.use_feature and (args.feature_prop in {'residual', 'cat'} or getattr(args, 'initial_residual', False))
+        if self.use_encoder:
             self.feature_encoder = Linear(num_features, hidden_channels)
-            self.convs.append(
-                GCNConv(hidden_channels, hidden_channels))
         else:
-            self.convs.append(
-                GCNConv(num_features, hidden_channels))
-        for _ in range(self.num_layers - 1):
-            self.convs.append(
-                GCNConv(hidden_channels, hidden_channels))
+            self.feature_encoder = None
+            in_dim = num_features
+        self.convs.append(GCNConv(in_dim, hidden_channels))
+        for _ in range(1, self.num_layers):
+            self.convs.append(GCNConv(hidden_channels, hidden_channels))
+        # if cat: need to project after concatenation 
+        import torch.nn as nn
+        if args.feature_prop == 'cat':
+            self.cat_proj = nn.ModuleList([Linear(hidden_channels * 2, hidden_channels) for i in range(self.num_layers)])
+        else:
+            self.cat_proj = None
         if self.node_embedding is not None:
-            self.emb_convs = torch.nn.ModuleList()
-            for _ in range(self.num_layers):  # assuming the embedding has hidden_channels dims
-                self.emb_convs.append(GCNConv(hidden_channels, hidden_channels))
+            self.emb_convs = nn.ModuleList([GCNConv(hidden_channels, hidden_channels) for _ in range(self.num_layers)])
+
+    def _maybe_init_sketches(self, num_nodes, device):
+        # re-init nếu chưa có hoặc size mismatch
+        if self.init_hashes is None or self.init_hashes.size(0) != num_nodes:
+            self.init_hashes = self.elph_hashes.initialise_minhash(num_nodes).to(device)
+        if self.init_hll is None or self.init_hll.size(0) != num_nodes:
+            self.init_hll = self.elph_hashes.initialise_hll(num_nodes).to(device)
 
     def propagate_embeddings_func(self, edge_index):
         num_nodes = self.node_embedding.num_embeddings
@@ -173,6 +185,9 @@ class ELPH(torch.nn.Module):
         if self.feature_prop == 'residual':
             out = x + out
 
+        elif self.feature_prop == 'cat':
+            out = torch.cat([x, out], dim=1)
+            out = self.cat_proj[k - 1](out)
         if self.initial_residual and x0 is not None:
             out = out + x0
 
@@ -206,8 +221,14 @@ class ELPH(torch.nn.Module):
         @param adj_t: edge index tensor [2, num_links]
         @return:
         """
+        device = edge_index.device
+        num_nodes = x.size(0)
         x_feature_0 = None
         hash_edge_index, _ = add_self_loops(edge_index)  # unnormalised, but with self-loops
+        self._maybe_init_sketches(num_nodes, device)
+
+        x = self._encode_features(x)
+        x_feature_0 = x if (self.initial_residual and x is not None) else None
         # if this is the first call then initialise the minhashes and hlls - these need to be the same for every model call
         num_nodes, num_features = x.shape
         if self.init_hashes == None:
@@ -235,7 +256,9 @@ class ELPH(torch.nn.Module):
                 node_hashings_table[k]['minhash'] = self.elph_hashes.minhash_prop(node_hashings_table[k - 1]['minhash'],
                                                                                   hash_edge_index)
                 cards[:, k - 1] = self.elph_hashes.hll_count(node_hashings_table[k]['hll'])
-                x = self.feature_conv(x, edge_index, k, x0=x_feature_0)
+                
+                if x is not None:
+                    x = self.feature_conv(x, edge_index, k-1, x_feature_0)
 
             logger.info(f'{k} hop hash generation ran in {time() - start} s')
 

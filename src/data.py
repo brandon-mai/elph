@@ -107,7 +107,7 @@ def get_data(args):
     if dataset_name.startswith('ogbl'):  # use the built in splits
         data = dataset[0]
         split_edge = dataset.get_edge_split()
-        if dataset_name == 'ogbl-collab' and args.year > 0:  # filter out training edges before args.year
+        if dataset_name == 'ogbl-collab' and args.curr > 0:  # filter out training edges before args.year
             data, split_edge = filter_by_year(data, split_edge, args.year)
         splits = get_ogb_data(data, split_edge, dataset_name, args.num_negs)
     else:  # make random splits
