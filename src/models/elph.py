@@ -121,7 +121,7 @@ class ELPH(torch.nn.Module):
         self.init_hashes = None
         self.init_hll = None
         self.num_perm = args.minhash_num_perm
-        self.hll_size = 2 ^ args.hll_p
+        self.hll_size = 2 ** args.hll_p
         # gnn things
         self.use_feature = args.use_feature
         self.feature_prop = args.feature_prop  # None, residual, cat
@@ -145,7 +145,7 @@ class ELPH(torch.nn.Module):
 
     def _convolution_builder(self, num_features, hidden_channels, args):
         self.convs = torch.nn.ModuleList()
-        if args.feature_prop in {'residual', 'cat'}:  # use a linear encoder
+        if args.feature_prop in {'residual', 'cat'}:  # use a linear encoder? hnhu day moi la linear
             self.feature_encoder = Linear(num_features, hidden_channels)
             self.convs.append(
                 GCNConv(hidden_channels, hidden_channels))
