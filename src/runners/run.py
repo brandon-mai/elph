@@ -288,7 +288,7 @@ def select_model(args, dataset, emb, device):
     if args.train_node_embedding:
         # torch.nn.init.xavier_uniform_(emb.weight)
         parameters += list(emb.parameters())
-    optimizer = torch.optim.Adam(params=parameters, lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.AdamW(params=parameters, lr=args.lr, weight_decay=args.weight_decay)
     total_params = sum(p.numel() for param in parameters for p in param)
     print(f'Total number of parameters is {total_params}')
     if args.model == 'DGCNN':
